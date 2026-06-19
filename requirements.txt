@@ -1,0 +1,6 @@
+httpx>=0.27
+pydantic>=2
+python-dotenv>=1
+mcp[cli]>=1.2
+tzdata>=2024.1  # IANA tz database (Windows has no system zoneinfo)
+pytest>=8

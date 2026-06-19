@@ -1,0 +1,25 @@
+[project]
+name = "nellis-hunter"
+version = "0.1.0"
+description = "Nellis Auction deal hunter + MCP server (read-only resale-flip scout)"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2",
+    "python-dotenv>=1",
+    "mcp[cli]>=1.2",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["nellis_hunter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

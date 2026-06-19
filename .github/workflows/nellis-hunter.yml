@@ -1,0 +1,45 @@
+name: Nellis Hunter daily sweep
+
+# Preferred scheduling method (free, cloud, no always-on machine needed).
+# Cron is UTC. 14:00 UTC = 07:00 America/Phoenix (AZ has no DST).
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch: {}  # allow manual runs from the Actions tab
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: nellis-hunter
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # Persist the dedup DB between runs via the Actions cache so the same lot
+      # isn't re-surfaced every day.
+      - name: Restore dedup DB
+        uses: actions/cache@v4
+        with:
+          path: nellis_hunter.db
+          key: nellis-db-${{ github.run_id }}
+          restore-keys: nellis-db-
+
+      - name: Run sweep
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PREMIUM: "0.15"
+          TAX: "0.083"
+          TARGET_PROFIT: "25"
+          MIN_MARGIN_PCT: "0.30"
+          FLIP_CATEGORIES: "Computers, Laptops, Tablets & Accessories|Monitors & Monitor Stands|Networking & Drives|Headphones|Speakers|Cameras & Photography Equipment"
+          LOCATIONS: "Phoenix|Mesa"
+        run: python -m nellis_hunter.run --closing-within-hours 30
