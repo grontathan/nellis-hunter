@@ -133,6 +133,15 @@ def test_score_uses_lot_premium_over_config():
     assert sc.all_in_at_current_bid == pytest.approx(all_in(30, 0.20, TAX), abs=1e-6)
 
 
+def test_score_zero_current_bid_does_not_crash():
+    # A $0 opening bid makes all-in 0 → margin_pct undefined (None). Scoring must
+    # still produce a verdict + reason string without a format-on-None crash.
+    sc = score(_lot(retail_price=300, current_bid=0.0), 200.0, CFG)
+    assert sc.margin_pct is None
+    assert sc.verdict in (Verdict.WATCH, Verdict.BID)
+    assert isinstance(sc.reason, str) and sc.reason  # reason rendered, not raised
+
+
 def test_margin_pct_relative_to_all_in():
     sc = score(_lot(retail_price=300, current_bid=50.0), 200.0, CFG)
     expected = sc.projected_margin_at_current_bid / sc.all_in_at_current_bid

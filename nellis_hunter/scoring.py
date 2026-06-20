@@ -173,8 +173,11 @@ def _verdict(current_bid: float, sc: Scoring, config: ScoringConfig) -> tuple[Ve
             f"margin {sc.margin_pct:.0%} ≥ {config.min_margin_pct:.0%}."
         )
     if profitable and (headroom or margin_ok):
+        # margin_pct is None when current_bid is $0 (all-in = 0, undefined ratio);
+        # guard the format the same way the SKIP branch does.
+        margin_str = f"{sc.margin_pct:.0%}" if sc.margin_pct is not None else "n/a"
         return Verdict.WATCH, (
-            f"Profitable but borderline (margin {sc.margin_pct:.0%}, "
+            f"Profitable but borderline (margin {margin_str}, "
             f"max_bid ${sc.max_bid:.0f} vs current ${current_bid:.0f})."
         )
     return Verdict.SKIP, (
