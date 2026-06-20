@@ -1,0 +1,72 @@
+name: Nellis Hunter on-demand /hunt
+
+# Triggered by the Cloudflare worker when someone runs the Discord `/hunt`
+# slash command. The worker has already sent Discord a deferred ("Hunter is
+# searching…") ack and passes the interaction token here so results post back
+# under the command. Runs with --no-db: on-demand queries should show every
+# match every time, not be deduped against the scheduled digest.
+on:
+  workflow_dispatch:
+    inputs:
+      category:
+        description: "Nellis Taxonomy category (Level 1 or 2)"
+        required: true
+        type: string
+      location:
+        description: "Pipe-separated locations"
+        required: false
+        default: "Phoenix|Mesa"
+        type: string
+      keywords:
+        description: "Optional free-text filter"
+        required: false
+        default: ""
+        type: string
+      closing_within_hours:
+        description: "Only lots closing within N hours"
+        required: false
+        default: "48"
+        type: string
+      app_id:
+        description: "Discord application id (for the followup webhook)"
+        required: true
+        type: string
+      interaction_token:
+        description: "Discord interaction token (15-min validity)"
+        required: true
+        type: string
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Hunt
+        env:
+          # Routing the digest back to the slash command instead of a webhook.
+          INTERACTION_APP_ID: ${{ inputs.app_id }}
+          INTERACTION_TOKEN: ${{ inputs.interaction_token }}
+          # Match the daily sweep's cost formula. Resale stays on the fast
+          # heuristic (no eBay scrape) so the command returns promptly.
+          PREMIUM: "0.15"
+          TAX: "0.083"
+          TARGET_PROFIT: "25"
+          MIN_MARGIN_PCT: "0.30"
+        run: |
+          args=(--no-db
+                --categories "${{ inputs.category }}"
+                --locations "${{ inputs.location }}"
+                --closing-within-hours "${{ inputs.closing_within_hours }}")
+          if [ -n "${{ inputs.keywords }}" ]; then
+            args+=(--keywords "${{ inputs.keywords }}")
+          fi
+          python -m nellis_hunter.run "${args[@]}"

@@ -186,6 +186,72 @@ class DiscordNotifier(Notifier):
             return
 
 
+class InteractionNotifier(Notifier):
+    """Posts a digest back to a Discord *slash-command* interaction.
+
+    Unlike a webhook, a `/hunt` command is answered against the interaction's
+    followup endpoint, keyed by the application id + the interaction token the
+    Cloudflare worker hands us. The worker already sent a deferred ("Hunter is
+    searching…") ack, so the FIRST batch edits that placeholder in place
+    (PATCH @original) and any overflow batches are posted as followups.
+
+    The interaction token is valid for 15 minutes — comfortably longer than a
+    sweep — so no auth header is needed; the token itself is the credential."""
+
+    EMBEDS_PER_MESSAGE = 10
+    MAX_CHARS = 1900
+
+    def __init__(self, application_id: str, interaction_token: str, client: httpx.Client | None = None):
+        if not (application_id and interaction_token):
+            raise ValueError("InteractionNotifier requires application_id and interaction_token")
+        self.base = f"https://discord.com/api/v10/webhooks/{application_id}/{interaction_token}"
+        self._client = client or httpx.Client(timeout=30.0)
+        self._owns = client is None
+
+    def close(self) -> None:
+        if self._owns:
+            self._client.close()
+
+    def send(self, scored_lots: list[ScoredLot], *, header: str = "") -> None:
+        if not scored_lots:
+            self._edit_original({"content": (header + "\n" if header else "") + "(no lots surfaced)"})
+            return
+
+        embeds = [format_embed(s) for s in scored_lots]
+        batches = [
+            embeds[i: i + self.EMBEDS_PER_MESSAGE]
+            for i in range(0, len(embeds), self.EMBEDS_PER_MESSAGE)
+        ]
+        # First batch replaces the deferred placeholder; the rest are followups.
+        first: dict = {"embeds": batches[0]}
+        if header:
+            first["content"] = header[: self.MAX_CHARS]
+        self._edit_original(first)
+        for batch in batches[1:]:
+            self._post_followup({"embeds": batch})
+
+    def _edit_original(self, payload: dict) -> None:
+        self._request("PATCH", f"{self.base}/messages/@original", payload)
+
+    def _post_followup(self, payload: dict) -> None:
+        self._request("POST", self.base, payload)
+
+    def _request(self, method: str, url: str, payload: dict, *, max_retries: int = 3) -> None:
+        """One Discord call, honoring the 429 Retry-After like DiscordNotifier."""
+        for attempt in range(max_retries):
+            resp = self._client.request(method, url, json=payload)
+            if resp.status_code == 429 and attempt < max_retries - 1:
+                retry_after = 1.0
+                try:
+                    retry_after = float(resp.json().get("retry_after", 1.0))
+                except (ValueError, KeyError, TypeError):
+                    retry_after = float(resp.headers.get("Retry-After", "1"))
+                time.sleep(min(retry_after, 10.0))
+                continue
+            resp.raise_for_status()
+            return
+
+
 # Stubs for the other sinks named in the brief — same interface, drop-in later.
 class TelegramNotifier(Notifier):  # pragma: no cover - stub
     def __init__(self, bot_token: str, chat_id: str):

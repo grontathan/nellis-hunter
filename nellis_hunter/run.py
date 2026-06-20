@@ -9,12 +9,13 @@ Windows Task Scheduler, or unix cron).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 
 from .config import load_config
 from .db import NellisDB
-from .notify import ConsoleNotifier, build_notifier
+from .notify import ConsoleNotifier, InteractionNotifier, build_notifier
 from .pipeline import Pipeline
 
 
@@ -69,14 +70,25 @@ def main(argv: list[str] | None = None) -> int:
         f"({result.detail_fetches} live-bid checks)"
     )
 
-    notifier = ConsoleNotifier() if (args.console or args.dry_run) else build_notifier(
-        config.discord_webhook_url
-    )
+    # Three sinks, in priority order:
+    #   1. console/dry-run  -> stdout (local debugging, CI dry checks)
+    #   2. interaction env  -> post back to a Discord /hunt slash command
+    #   3. default          -> the configured webhook (scheduled digest)
+    app_id = os.getenv("INTERACTION_APP_ID")
+    token = os.getenv("INTERACTION_TOKEN")
+    if args.console or args.dry_run:
+        notifier = ConsoleNotifier()
+    elif app_id and token:
+        notifier = InteractionNotifier(app_id, token)
+    else:
+        notifier = build_notifier(config.discord_webhook_url)
     notifier.send(result.surfaced, header=header)
 
     pipeline.close()
     if db:
         db.close()
+    if hasattr(notifier, "close"):
+        notifier.close()
     return 0
 
 

@@ -12,3 +12,7 @@ cache/
 # Local editor / tool config (machine-specific)
 .claude/settings.local.json
 .vscode/
+
+# Cloudflare Worker build artifacts (bot/)
+node_modules/
+.wrangler/

@@ -6,7 +6,7 @@ away from the text describing them."""
 from datetime import datetime, timezone
 
 from nellis_hunter.models import Lot, Scoring, ScoredLot, Verdict
-from nellis_hunter.notify import DiscordNotifier, format_embed
+from nellis_hunter.notify import DiscordNotifier, InteractionNotifier, format_embed
 
 
 def _scored(**kw) -> ScoredLot:
@@ -97,3 +97,46 @@ def test_send_empty_posts_placeholder():
     DiscordNotifier("https://discord/webhook", client=cap).send([], header="**digest**")
     assert len(cap.payloads) == 1
     assert "no lots surfaced" in cap.payloads[0]["content"]
+
+
+class _CaptureRequestClient:
+    """Captures (method, url, json) for the request()-based InteractionNotifier."""
+
+    def __init__(self):
+        self.calls = []
+
+    def request(self, method, url, json):
+        self.calls.append((method, url, json))
+        return _Resp()
+
+    def close(self):
+        pass
+
+
+def test_interaction_edits_original_then_followups():
+    cap = _CaptureRequestClient()
+    notifier = InteractionNotifier("app123", "tok456", client=cap)
+    lots = [_scored(lot_id=str(i)) for i in range(23)]
+    notifier.send(lots, header="**Tools — 23 surfaced**")
+
+    methods = [c[0] for c in cap.calls]
+    urls = [c[1] for c in cap.calls]
+    payloads = [c[2] for c in cap.calls]
+    # First call edits the deferred placeholder; overflow batches are followups.
+    assert methods == ["PATCH", "POST", "POST"]
+    assert urls[0].endswith("/webhooks/app123/tok456/messages/@original")
+    assert urls[1] == "https://discord.com/api/v10/webhooks/app123/tok456"
+    assert [len(p["embeds"]) for p in payloads] == [10, 10, 3]
+    # Header rides on the first (edited) message only.
+    assert payloads[0]["content"] == "**Tools — 23 surfaced**"
+    assert "content" not in payloads[1]
+
+
+def test_interaction_empty_edits_placeholder_with_message():
+    cap = _CaptureRequestClient()
+    InteractionNotifier("app123", "tok456", client=cap).send([], header="**Tools**")
+    assert len(cap.calls) == 1
+    method, url, payload = cap.calls[0]
+    assert method == "PATCH"
+    assert url.endswith("/messages/@original")
+    assert "no lots surfaced" in payload["content"]
