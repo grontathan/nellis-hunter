@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS scored (
     current_bid REAL,
     max_bid   REAL,
     margin    REAL,
+    surfaced  INTEGER NOT NULL DEFAULT 0,  -- 1 if this lot made the run's digest
     payload   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scored_run ON scored(run_ts);
@@ -55,7 +56,15 @@ class NellisDB:
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive migrations for DBs created before a column existed. SQLite has
+        no IF NOT EXISTS for columns, so probe table_info and ALTER on demand."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(scored)")}
+        if "surfaced" not in cols:
+            self.conn.execute("ALTER TABLE scored ADD COLUMN surfaced INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self.conn.close()
@@ -113,8 +122,15 @@ class NellisDB:
         self.conn.commit()
 
     # -- run history --
-    def record_run(self, scored_lots: list[ScoredLot], run_ts: float | None = None) -> None:
+    def record_run(
+        self,
+        scored_lots: list[ScoredLot],
+        *,
+        surfaced: list[ScoredLot] | None = None,
+        run_ts: float | None = None,
+    ) -> None:
         run_ts = run_ts or time.time()
+        surfaced_ids = {s.lot_id for s in (surfaced or [])}
         rows = []
         for s in scored_lots:
             rows.append(
@@ -122,15 +138,39 @@ class NellisDB:
                     run_ts, s.lot.lot_id, s.lot.location, s.scoring.verdict.value,
                     s.lot.current_bid, s.scoring.max_bid,
                     s.scoring.projected_margin_at_current_bid,
+                    1 if s.lot_id in surfaced_ids else 0,
                     json.dumps(s.summary()),
                 )
             )
         self.conn.executemany(
             """INSERT INTO scored (run_ts, lot_id, location, verdict, current_bid,
-                   max_bid, margin, payload) VALUES (?,?,?,?,?,?,?,?)""",
+                   max_bid, margin, surfaced, payload) VALUES (?,?,?,?,?,?,?,?,?)""",
             rows,
         )
         self.conn.commit()
+
+    def run_summary(self, run_ts: float | None = None) -> dict:
+        """Counts for a run (latest by default): total scored, surfaced, and a
+        verdict breakdown. The surfaced count is now an exact column read."""
+        if run_ts is None:
+            row = self.conn.execute("SELECT MAX(run_ts) AS ts FROM scored").fetchone()
+            run_ts = row["ts"] if row else None
+        if run_ts is None:
+            return {"run_ts": None, "scanned": 0, "surfaced": 0, "verdicts": {}}
+        scanned = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM scored WHERE run_ts=?", (run_ts,)
+        ).fetchone()["n"]
+        surfaced = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM scored WHERE run_ts=? AND surfaced=1", (run_ts,)
+        ).fetchone()["n"]
+        verdicts = {
+            r["verdict"]: r["n"]
+            for r in self.conn.execute(
+                "SELECT verdict, COUNT(*) AS n FROM scored WHERE run_ts=? GROUP BY verdict",
+                (run_ts,),
+            )
+        }
+        return {"run_ts": run_ts, "scanned": scanned, "surfaced": surfaced, "verdicts": verdicts}
 
     def last_run_ts(self) -> datetime | None:
         row = self.conn.execute("SELECT MAX(run_ts) AS ts FROM scored").fetchone()

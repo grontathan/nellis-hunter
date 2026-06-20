@@ -158,7 +158,7 @@ class Pipeline:
         surfaced = surfaced[: self.config.max_digest_lots]
 
         if db is not None:
-            db.record_run(prescored)
+            db.record_run(prescored, surfaced=surfaced)
             for s in prescored:
                 db.mark_seen(s, surfaced=s in surfaced)
 
