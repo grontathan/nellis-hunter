@@ -107,6 +107,7 @@ def load_config() -> Config:
                 "Computers, Laptops, Tablets & Accessories",
                 "Monitors & Monitor Stands",
                 "Networking & Drives",
+                "Home Improvement",
             ],
         ),
         locations=_list("LOCATIONS", ["Phoenix", "Mesa"]),

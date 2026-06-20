@@ -40,6 +40,6 @@ jobs:
           TAX: "0.083"
           TARGET_PROFIT: "25"
           MIN_MARGIN_PCT: "0.30"
-          FLIP_CATEGORIES: "Computers, Laptops, Tablets & Accessories|Monitors & Monitor Stands|Networking & Drives|Headphones|Speakers|Cameras & Photography Equipment"
+          FLIP_CATEGORIES: "Computers, Laptops, Tablets & Accessories|Monitors & Monitor Stands|Networking & Drives|Headphones|Speakers|Cameras & Photography Equipment|Home Improvement"
           LOCATIONS: "Phoenix|Mesa"
         run: python -m nellis_hunter.run --closing-within-hours 30
