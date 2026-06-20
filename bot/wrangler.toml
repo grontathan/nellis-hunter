@@ -1,16 +1,20 @@
 # Cloudflare Worker config for the Nellis Hunter Discord /hunt relay.
 # Deploy:  cd bot && npx wrangler deploy
 # Secrets: npx wrangler secret put DISCORD_PUBLIC_KEY
-#          npx wrangler secret put GH_TOKEN
+#          npx wrangler secret put GH_APP_PRIVATE_KEY
 name = "nellis-hunter-bot"
 main = "worker.js"
 compatibility_date = "2024-09-23"
 
 # Public, non-secret config. Point GH_REPO at your fork; GH_REF is the branch
-# the on-demand workflow runs on.
+# the on-demand workflow runs on. GH_APP_ID / GH_INSTALLATION_ID identify the
+# GitHub App and its install on the repo — neither is secret (only the App's
+# private key is, and that lives in the GH_APP_PRIVATE_KEY secret).
 [vars]
 GH_REPO = "grontathan/nellis-hunter"
 GH_REF = "main"
+GH_APP_ID = "<app id>"
+GH_INSTALLATION_ID = "<installation id>"
 
-# Secrets (DISCORD_PUBLIC_KEY, GH_TOKEN) are NOT stored here — set them with
-# `wrangler secret put`, which keeps them encrypted and out of source control.
+# Secrets (DISCORD_PUBLIC_KEY, GH_APP_PRIVATE_KEY) are NOT stored here — set them
+# with `wrangler secret put`, which keeps them encrypted and out of source control.

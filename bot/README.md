@@ -29,31 +29,69 @@ The Worker is a thin relay (free tier). The scrape runs in GitHub Actions
    want it in the member list) → open the generated URL → add it to your server.
 
 ### 2. Register the `/hunt` command
-From the repo root, with the values from step 1:
+From the repo root, with the values from step 1.
+
+bash / macOS / Linux:
 
 ```bash
 DISCORD_APP_ID=<app id> DISCORD_BOT_TOKEN=<bot token> \
   python bot/register_commands.py
 ```
 
+PowerShell (Windows) — the inline `VAR=val` prefix above is bash-only and
+won't set anything in PowerShell, so set the vars first:
+
+```powershell
+$env:DISCORD_APP_ID = "<app id>"
+$env:DISCORD_BOT_TOKEN = "<bot token>"
+python bot/register_commands.py
+```
+
 Global commands can take up to ~1h to appear the *first* time; later
 re-registers are instant. Edit `CATEGORY_CHOICES` in `register_commands.py` to
 change the dropdown.
 
-### 3. Create a GitHub token for the Worker
-A **fine-grained PAT** scoped to this repo with **Actions: Read and write**
-(github.com → Settings → Developer settings → Fine-grained tokens). This lets
-the Worker trigger the `hunt-on-demand.yml` workflow.
+### 3. Create a GitHub App for the Worker
+The Worker triggers `hunt-on-demand.yml` as a **GitHub App** — a machine identity
+that isn't tied to a personal account and whose access tokens auto-rotate, so
+nothing expires on you. (A personal access token would work but is personal and
+expires by design; not appropriate for an autonomous tool.)
+
+1. github.com → Settings → Developer settings → **GitHub Apps** → **New GitHub App**.
+   Homepage URL can be anything; you can leave the webhook **unchecked**.
+2. **Permissions** → Repository → **Actions: Read and write** (that's the only one
+   needed). Create the App.
+3. On the App's page, **Generate a private key** — this downloads a `.pem`
+   (PKCS#1 format).
+4. **Install App** (left nav) → install it on **this repo only**. Note the
+   **Installation ID** from the resulting URL: `…/installations/<id>`.
+5. Note the **App ID** from the App's **General** settings.
+6. Convert the key to PKCS#8, which the Worker's WebCrypto requires:
+   ```bash
+   openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+     -in your-app.private-key.pem -out app.pkcs8.pem
+   ```
+   The result starts with `-----BEGIN PRIVATE KEY-----`.
 
 ### 4. Deploy the Cloudflare Worker
+First set `GH_APP_ID` and `GH_INSTALLATION_ID` (and `GH_REPO` / `GH_REF` if your
+fork differs) in `wrangler.toml`. Then:
+
 ```bash
 cd bot
 npm install -g wrangler        # if you don't have it
 wrangler login
-# set GH_REPO / GH_REF in wrangler.toml if your fork differs
-wrangler secret put DISCORD_PUBLIC_KEY   # paste the Public Key from step 1
-wrangler secret put GH_TOKEN             # paste the PAT from step 3
-wrangler deploy                          # prints your Worker URL
+wrangler secret put DISCORD_PUBLIC_KEY        # paste the Public Key from step 1
+wrangler secret put GH_APP_PRIVATE_KEY < app.pkcs8.pem   # the PKCS#8 key from step 3
+wrangler deploy                               # prints your Worker URL
+```
+
+PowerShell (Windows) — pipe the key in, since the inline redirect differs:
+
+```powershell
+wrangler secret put DISCORD_PUBLIC_KEY
+Get-Content app.pkcs8.pem -Raw | npx wrangler secret put GH_APP_PRIVATE_KEY
+npx wrangler deploy
 ```
 
 ### 5. Point Discord at the Worker
@@ -87,6 +125,8 @@ it ~30-90s later (the GitHub Actions run time).
 - **"Interactions Endpoint URL" won't save** → `DISCORD_PUBLIC_KEY` secret is
   wrong or missing; re-run `wrangler secret put DISCORD_PUBLIC_KEY`.
 - **Command stuck on "🔍 Hunting…"** → the GitHub dispatch failed. Check the
-  Worker logs (`wrangler tail`) and that `GH_TOKEN` has Actions write on the repo.
+  Worker logs (`wrangler tail`). Common causes: `GH_APP_ID` /
+  `GH_INSTALLATION_ID` wrong, the App isn't installed on the repo, or
+  `GH_APP_PRIVATE_KEY` isn't the PKCS#8 (`BEGIN PRIVATE KEY`) form from step 3.6.
 - **`/hunt` doesn't appear** → wait for first-time global propagation, or
   confirm the OAuth2 invite included `applications.commands`.
