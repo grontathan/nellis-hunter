@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from .config import load_config
 from .feed import NellisFeed
 from .models import ScoredLot, Verdict
-from .resale import FixedResaleEstimator, HeuristicResaleEstimator
+from .resale import FixedResaleEstimator, HeuristicResaleEstimator, build_estimator
 from .scoring import all_in as all_in_calc
 from .scoring import max_bid as max_bid_calc
 from .scoring import score
@@ -26,7 +26,10 @@ from .scoring import score
 mcp = FastMCP("nellis-hunter")
 
 _config = load_config()
+# Fast heuristic for the bulk, Algolia-only `search_nellis`; the configured
+# estimator (eBay sold comps when RESALE_SOURCE=ebay) for single-lot lookups.
 _estimator = HeuristicResaleEstimator()
+_lot_estimator = build_estimator(_config)
 
 
 def _feed() -> NellisFeed:
@@ -67,7 +70,7 @@ def get_lot(lot_id: str) -> dict | None:
         lot = feed.get_lot(lot_id)
         if lot is None:
             return None
-        est = _estimator.estimate(lot)
+        est = _lot_estimator.estimate(lot)
         return ScoredLot(lot=lot, scoring=score(lot, est, _config.scoring)).summary()
 
 
@@ -98,7 +101,7 @@ def hot_deals(
     from .pipeline import Pipeline
 
     locations = [location] if location else None
-    pipeline = Pipeline(_config, feed=_feed(), estimator=_estimator)
+    pipeline = Pipeline(_config, feed=_feed())  # uses the configured estimator
     try:
         result = pipeline.sweep(
             locations=locations,

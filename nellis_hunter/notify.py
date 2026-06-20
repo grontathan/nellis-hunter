@@ -20,6 +20,68 @@ _VERDICT_EMOJI = {
     Verdict.NEEDS_MANUAL: "🔵 MANUAL",
 }
 
+# Embed accent color per verdict (Discord wants a decimal int).
+_VERDICT_COLOR = {
+    Verdict.BID: 0x2ECC71,       # green
+    Verdict.WATCH: 0xF1C40F,     # amber
+    Verdict.SKIP: 0x95A5A6,      # grey
+    Verdict.NEEDS_MANUAL: 0x3498DB,  # blue
+}
+
+
+def _money(v: float | None) -> str:
+    return f"${v:,.0f}" if v is not None else "—"
+
+
+def _closes(lot) -> str:
+    local = lot.close_time_local
+    # %-I isn't portable (no Windows support); strip the leading zero manually.
+    return local.strftime("%I:%M%p").lstrip("0").lower() if local else "?"
+
+
+def format_embed(scored: ScoredLot) -> dict:
+    """One Discord embed per lot: image + title + bid/pricing fields, as a single
+    self-contained card. This is the fix for the old plain-text digest, where
+    Discord would auto-unfurl each URL into its own embed and shuffle the images
+    away from the text describing them. An explicit embed keeps the photo welded
+    to its listing's numbers."""
+    lot, sc = scored.lot, scored.scoring
+    tag = _VERDICT_EMOJI.get(sc.verdict, sc.verdict.value)
+
+    title = lot.title.replace("\n", " ").strip()
+    if len(title) > 230:
+        title = title[:227] + "…"
+
+    margin = sc.projected_margin_at_current_bid
+    if margin is not None:
+        pct = f" ({sc.margin_pct:.0%})" if sc.margin_pct is not None else ""
+        margin_field = f"{_money(margin)}{pct}"
+    else:
+        margin_field = "no live bid"
+
+    bids = f" ({lot.bid_count} bids)" if lot.bid_count else ""
+
+    fields = [
+        {"name": "Current bid", "value": f"{_money(lot.current_bid)}{bids}", "inline": True},
+        {"name": "Max bid", "value": _money(sc.max_bid), "inline": True},
+        {"name": "Margin", "value": margin_field, "inline": True},
+        {"name": "Retail", "value": _money(lot.retail_price), "inline": True},
+        {"name": "Resale est", "value": _money(sc.resale_estimate), "inline": True},
+        {"name": "Closes", "value": _closes(lot), "inline": True},
+    ]
+
+    footer_bits = [b for b in (lot.location, lot.condition, lot.category) if b]
+    embed: dict = {
+        "title": f"{tag} · {title}",
+        "url": lot.url,
+        "color": _VERDICT_COLOR.get(sc.verdict, 0x95A5A6),
+        "fields": fields,
+        "footer": {"text": " · ".join(footer_bits)[:2048]} if footer_bits else {},
+    }
+    if lot.image_url:
+        embed["image"] = {"url": lot.image_url}
+    return embed
+
 
 def format_line(scored: ScoredLot) -> str:
     """One compact human line per lot for the digest."""
@@ -66,9 +128,14 @@ class ConsoleNotifier(Notifier):
 
 
 class DiscordNotifier(Notifier):
-    """Posts the digest to a Discord webhook, chunked under the 2000-char limit."""
+    """Posts the digest to a Discord webhook as one rich embed per lot.
+
+    Each lot is a self-contained card (image + bid/pricing fields), so the photo
+    stays attached to the numbers describing it. Discord allows at most 10 embeds
+    per message, so the digest is sent in batches of 10."""
 
     MAX_CHARS = 1900
+    EMBEDS_PER_MESSAGE = 10
 
     def __init__(self, webhook_url: str, client: httpx.Client | None = None):
         if not webhook_url:
@@ -82,19 +149,30 @@ class DiscordNotifier(Notifier):
             self._client.close()
 
     def send(self, scored_lots: list[ScoredLot], *, header: str = "") -> None:
-        lines = [format_line(s) for s in scored_lots] or ["(no lots surfaced today)"]
-        chunks = self._chunk([header] + lines if header else lines)
-        for chunk in chunks:
-            self._post(chunk)
+        if not scored_lots:
+            self._post({"content": (header + "\n" if header else "") + "(no lots surfaced today)"})
+            return
+
+        embeds = [format_embed(s) for s in scored_lots]
+        # First batch carries the header as the message content; the rest are
+        # embed-only follow-ups. 10 embeds per message is Discord's hard cap.
+        first = True
+        for i in range(0, len(embeds), self.EMBEDS_PER_MESSAGE):
+            batch = embeds[i: i + self.EMBEDS_PER_MESSAGE]
+            payload: dict = {"embeds": batch}
+            if first and header:
+                payload["content"] = header[: self.MAX_CHARS]
+            first = False
+            self._post(payload)
 
     def send_text(self, content: str) -> None:
         """Post a single arbitrary message (used by the webhook self-test)."""
-        self._post(content[: self.MAX_CHARS])
+        self._post({"content": content[: self.MAX_CHARS]})
 
-    def _post(self, content: str, *, max_retries: int = 3) -> None:
+    def _post(self, payload: dict, *, max_retries: int = 3) -> None:
         """POST one message, honoring Discord's 429 rate limit (Retry-After)."""
         for attempt in range(max_retries):
-            resp = self._client.post(self.webhook_url, json={"content": content})
+            resp = self._client.post(self.webhook_url, json=payload)
             if resp.status_code == 429 and attempt < max_retries - 1:
                 # Discord tells us exactly how long to wait, in seconds.
                 retry_after = 1.0
@@ -106,20 +184,6 @@ class DiscordNotifier(Notifier):
                 continue
             resp.raise_for_status()
             return
-
-    def _chunk(self, blocks: list[str]) -> list[str]:
-        chunks, cur = [], ""
-        for block in blocks:
-            piece = (block + "\n\n")
-            if len(cur) + len(piece) > self.MAX_CHARS:
-                if cur:
-                    chunks.append(cur.rstrip())
-                cur = piece
-            else:
-                cur += piece
-        if cur.strip():
-            chunks.append(cur.rstrip())
-        return chunks
 
 
 # Stubs for the other sinks named in the brief — same interface, drop-in later.

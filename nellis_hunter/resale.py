@@ -8,8 +8,12 @@ drops in behind the same interface with no change to scoring/pipeline/MCP.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from .models import Lot
+
+if TYPE_CHECKING:
+    from .ebay import EbayCompsClient
 
 # Fraction of MSRP a used/returned item realistically resells for on eBay,
 # keyed by a substring of the lot's category (taxonomy). Configurable lookup.
@@ -111,3 +115,73 @@ class FixedResaleEstimator(ResaleEstimator):
 
     def estimate(self, lot: Lot) -> float | None:
         return self.value
+
+
+class EbayResaleEstimator(ResaleEstimator):
+    """v2: resale ≈ median eBay sold-comp price, condition-adjusted.
+
+    Pulls real sold comps for the lot via `EbayCompsClient`, then applies the same
+    condition multiplier the heuristic uses — a damaged/untested Nellis item sells
+    below the median of its sold comps. Returns None when there aren't enough comps,
+    so a caller can fall back to the heuristic (see `CompositeResaleEstimator`)."""
+
+    def __init__(self, client: "EbayCompsClient", *, apply_condition: bool = True):
+        self.client = client
+        self.apply_condition = apply_condition
+
+    def estimate(self, lot: Lot) -> float | None:
+        from .ebay import build_query  # local import: keep resale.py I/O-free to import
+
+        summary = self.client.sold_comps(build_query(lot))
+        if not summary:
+            return None
+        median = summary["median"]
+        if self.apply_condition:
+            median *= condition_multiplier(lot.condition)
+        return round(median, 2)
+
+
+class CompositeResaleEstimator(ResaleEstimator):
+    """Try each estimator in order; first non-None wins. Lets v2 (eBay comps)
+    lead, then degrade gracefully to the v1 heuristic, then to None/NEEDS_MANUAL."""
+
+    def __init__(self, estimators: list[ResaleEstimator]):
+        self.estimators = estimators
+
+    def estimate(self, lot: Lot) -> float | None:
+        for est in self.estimators:
+            value = est.estimate(lot)
+            if value is not None:
+                return value
+        return None
+
+
+def build_ebay_client(config) -> "EbayCompsClient":
+    """Construct an `EbayCompsClient` wired to the app's disk cache + politeness
+    settings. Kept here so callers don't have to import the feed/ebay internals."""
+    from .ebay import EbayCompsClient
+    from .feed import DiskCache
+
+    return EbayCompsClient(
+        DiskCache(config.cache_dir),
+        user_agent=config.user_agent,
+        interval=config.ebay_request_interval_seconds,
+        cache_ttl=config.ebay_cache_ttl,
+        min_comps=config.ebay_min_comps,
+    )
+
+
+def build_estimator(config, *, ebay_client: "EbayCompsClient | None" = None) -> ResaleEstimator:
+    """Pick the resale estimator from config.
+
+    RESALE_SOURCE=ebay  → eBay sold comps, falling back to the retail heuristic when
+                          a lot has too few comps (best of both; the v2 default).
+    RESALE_SOURCE=heuristic → retail-haircut only (v1; no eBay traffic).
+
+    The returned estimator may hit the network, so the pipeline only runs it on the
+    small enriched shortlist — never across every discovered candidate."""
+    heuristic = HeuristicResaleEstimator()
+    if getattr(config, "resale_source", "heuristic").lower() != "ebay":
+        return heuristic
+    client = ebay_client or build_ebay_client(config)
+    return CompositeResaleEstimator([EbayResaleEstimator(client), heuristic])

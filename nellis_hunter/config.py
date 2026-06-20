@@ -64,6 +64,12 @@ class Config:
     # Output
     discord_webhook_url: str = ""
 
+    # Resale estimation (v2). "ebay" = real sold comps w/ heuristic fallback; "heuristic" = v1.
+    resale_source: str = "heuristic"
+    ebay_request_interval_seconds: float = 3.0
+    ebay_cache_ttl: int = 86_400  # sold comps move slowly; cache a day
+    ebay_min_comps: int = 3       # need at least this many sold comps to trust the median
+
     # Politeness
     request_interval_seconds: float = 2.5
     search_cache_ttl: int = 3600
@@ -105,6 +111,10 @@ def load_config() -> Config:
         ),
         locations=_list("LOCATIONS", ["Phoenix", "Mesa"]),
         discord_webhook_url=_s("DISCORD_WEBHOOK_URL", ""),
+        resale_source=_s("RESALE_SOURCE", "heuristic"),
+        ebay_request_interval_seconds=_f("EBAY_REQUEST_INTERVAL_SECONDS", 3.0),
+        ebay_cache_ttl=_i("EBAY_CACHE_TTL", 86_400),
+        ebay_min_comps=_i("EBAY_MIN_COMPS", 3),
         request_interval_seconds=_f("REQUEST_INTERVAL_SECONDS", 2.5),
         search_cache_ttl=_i("SEARCH_CACHE_TTL", 3600),
         detail_cache_ttl=_i("DETAIL_CACHE_TTL", 1800),

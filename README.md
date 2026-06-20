@@ -118,8 +118,12 @@ New Webhook → Copy Webhook URL**, then put it in `.env` as `DISCORD_WEBHOOK_UR
 python -m nellis_hunter.notify --test    # posts a test message to your channel
 ```
 
-The Discord sink chunks messages under Discord's 2000-char limit and backs off on
-the webhook's `429` rate limit automatically.
+The Discord sink posts **one rich embed per lot** — a self-contained card with the
+listing photo welded to its bid/pricing fields (current bid, max bid, margin, retail,
+resale estimate, close time). This replaces the old plain-text digest, where Discord
+auto-unfurled each bare URL into its own embed and the images drifted away from the
+text describing them. Embeds are batched at Discord's 10-per-message cap and the sink
+backs off on the webhook's `429` rate limit automatically.
 
 ---
 
@@ -200,6 +204,7 @@ nellis_hunter/
   scoring.py       # Part B — pure cost + flip math (unit-tested)
   resale.py        # Part B — ResaleEstimator interface + v1 heuristic
   pipeline.py      # Part C — sweep, enrich, dedup, rank
+  ebay.py          # Part B — eBay sold-comps client (v2 resale data source)
   db.py            # Part C — SQLite dedup + run history
   notify.py        # Part C — Notifier interface + Discord (+ stubs)
   run.py           # Part C — CLI entry point for the scheduled job
@@ -219,6 +224,23 @@ NELLIS_API.md      # discovered Algolia + detail-page contract
 - **No retail in payload → `NEEDS_MANUAL`.** That's expected; surface it and drop in an
   eBay comp via `score_lot`. The heuristic resale estimate is deliberately conservative
   (better to skip than overbid on a phantom margin).
+- **Resale estimator (v1 vs v2).** `RESALE_SOURCE` in `.env` selects the data source
+  behind the `ResaleEstimator` seam:
+  - `heuristic` (v1) — `resale ≈ retail × category_haircut × condition_multiplier`.
+    No external traffic. Degrades to `NEEDS_MANUAL` when a lot has no retail.
+  - `ebay` (v2) — real eBay **sold** comps: builds a search from the lot's brand +
+    model, scrapes the completed/sold results, and uses a trimmed median (condition-
+    adjusted) as the resale value. Falls back to the v1 heuristic per-lot when there
+    are too few comps. To stay polite, eBay is queried **only for the enriched
+    shortlist** (the `MAX_DETAIL_FETCHES` lots that get a live-bid check), never for
+    every discovered candidate; results cache for `EBAY_CACHE_TTL` (default 1 day).
+  - **Caveat:** eBay's `/sch/` search sits behind Akamai bot management and reliably
+    returns `403/503` from **datacenter IPs** — including GitHub Actions runners. From
+    a residential IP (e.g. running the sweep on your own PC) it generally works; in CI
+    it will usually be blocked, at which point v2 silently falls back to the v1
+    heuristic. For robust automated sold-comps you'd need a headless browser, a
+    scraping proxy, or eBay's gated Marketplace Insights API — all behind the same
+    `ResaleEstimator` interface, so any of them is a drop-in replacement later.
 - **Politeness:** detail fetches to nellisauction.com are single-threaded, ≥2.5s apart,
   backed off on 429/5xx, and cached to `cache/`. A daily sweep makes tens — not
   thousands — of detail requests. Respect Nellis's ToS; this is a personal hunting aid.

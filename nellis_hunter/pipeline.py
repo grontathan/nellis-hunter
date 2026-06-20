@@ -18,7 +18,7 @@ from .config import Config, load_config
 from .db import NellisDB
 from .feed import FeedError, NellisFeed
 from .models import Lot, ScoredLot, Verdict
-from .resale import HeuristicResaleEstimator, ResaleEstimator
+from .resale import HeuristicResaleEstimator, ResaleEstimator, build_estimator
 from .scoring import score
 
 
@@ -48,7 +48,13 @@ class Pipeline:
     ):
         self.config = config or load_config()
         self.feed = feed or NellisFeed(self.config)
-        self.estimator = estimator or HeuristicResaleEstimator()
+        # Two estimators on purpose: the prescore one ranks EVERY discovered
+        # candidate, so it must be cheap (heuristic, no network). The final one
+        # re-scores only the small enriched shortlist, so it can be the v2 eBay
+        # estimator (one polite eBay request per shortlisted lot, bounded by
+        # MAX_DETAIL_FETCHES). Both default from config; a passed estimator wins.
+        self.prescore_estimator = HeuristicResaleEstimator()
+        self.estimator = estimator or build_estimator(self.config)
 
     # -- discovery + pre-scoring (Algolia only) --
     def discover(
@@ -77,7 +83,8 @@ class Pipeline:
         return _dedup_lots(out)
 
     def _prescore(self, lot: Lot) -> ScoredLot:
-        est = self.estimator.estimate(lot)
+        # Cheap, network-free pre-score to decide which lots merit a detail fetch.
+        est = self.prescore_estimator.estimate(lot)
         return ScoredLot(lot=lot, scoring=score(lot, est, self.config.scoring))
 
     # -- full sweep --
@@ -164,3 +171,15 @@ class Pipeline:
 
     def close(self) -> None:
         self.feed.close()
+        _close_estimator(self.estimator)
+
+
+def _close_estimator(estimator: ResaleEstimator) -> None:
+    """Best-effort close of any eBay HTTP client held by the estimator tree."""
+    from .resale import CompositeResaleEstimator, EbayResaleEstimator
+
+    if isinstance(estimator, CompositeResaleEstimator):
+        for sub in estimator.estimators:
+            _close_estimator(sub)
+    elif isinstance(estimator, EbayResaleEstimator):
+        estimator.client.close()
